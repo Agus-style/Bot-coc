@@ -31,10 +31,6 @@ android {
         jvmTarget = '17'
     }
 
-    buildFeatures {
-        viewBinding true
-    }
-
     packagingOptions {
         pickFirst 'lib/x86/libopencv_java4.so'
         pickFirst 'lib/x86_64/libopencv_java4.so'
