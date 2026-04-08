@@ -3,61 +3,55 @@ package com.cocbot
 import android.graphics.PointF
 
 /**
- * Semua koordinat berdasarkan resolusi Infinix Hot 40i: 720 x 1612
- * Koordinat bisa di-adjust via UI settings
+ * Koordinat berdasarkan resolusi Infinix Hot 40i landscape: 1612 x 720
+ * COC dimainkan landscape
  */
 object BotConfig {
 
     // =====================
-    // KOORDINAT TOMBOL HOME
+    // KOORDINAT TOMBOL
+    // Semua koordinat landscape 1612x720
     // =====================
-    val BTN_ATTACK = PointF(113f, 1530f)          // Tombol Attack kiri bawah
-    val BTN_FIND_MATCH = PointF(360f, 1200f)      // Find a Match
-    val BTN_NEXT = PointF(600f, 1200f)            // Next (skip base)
-    val BTN_END_BATTLE = PointF(360f, 1500f)      // End Battle (surrender)
-    val BTN_RETURN_HOME = PointF(360f, 1400f)     // Return Home
-    val BTN_OKAY = PointF(360f, 1000f)            // OK/Confirm generic
-    val BTN_CLOSE = PointF(650f, 200f)            // Close dialog
-
-    // =====================
-    // AREA SUMBER DAYA
-    // =====================
-    // Region untuk OCR baca nilai gold/elixir
-    // Format: left, top, right, bottom
-    val REGION_GOLD = android.graphics.Rect(50, 35, 300, 75)
-    val REGION_ELIXIR = android.graphics.Rect(50, 75, 300, 115)
-    val REGION_DARK_ELIXIR = android.graphics.Rect(50, 115, 300, 150)
+    val BTN_ATTACK = PointF(113f, 648f)           // Tombol Serang! kiri bawah
+    val BTN_FIND_MATCH = PointF(250f, 505f)       // Cari Lawan Tanding
+    val BTN_NEXT = PointF(1496f, 510f)            // Berikutnya (kanan bawah)
+    val BTN_END_BATTLE = PointF(110f, 512f)       // Akhiri Serangan (merah kiri)
+    val BTN_RETURN_HOME = PointF(806f, 600f)      // Kembali ke Rumah
+    val BTN_OKAY = PointF(806f, 500f)             // OK generic
+    val BTN_ATTACK_CONFIRM = PointF(1496f, 600f)  // Tombol Serang! di layar army (hijau)
 
     // =====================
     // AREA DEPLOY TROOPS
+    // Landscape 1612x720
     // =====================
-    // Battle screen 720x1612, area game ~720x900
-    val DEPLOY_TOP_LEFT = PointF(150f, 150f)
-    val DEPLOY_TOP_RIGHT = PointF(570f, 150f)
-    val DEPLOY_BOTTOM_LEFT = PointF(150f, 850f)
-    val DEPLOY_BOTTOM_RIGHT = PointF(570f, 850f)
+    val DEPLOY_TOP = Pair(PointF(400f, 80f), PointF(1200f, 80f))
+    val DEPLOY_BOTTOM = Pair(PointF(400f, 640f), PointF(1200f, 640f))
+    val DEPLOY_LEFT = Pair(PointF(80f, 200f), PointF(80f, 520f))
+    val DEPLOY_RIGHT = Pair(PointF(1530f, 200f), PointF(1530f, 520f))
+
+    // =====================
+    // LOOT FILTER SETTINGS
+    // =====================
+    var minGoldTarget = 300_000L        // Min gold untuk serang
+    var minElixirTarget = 300_000L      // Min elixir untuk serang
+    var minDarkElixirTarget = 0L        // Min dark elixir (0 = tidak filter)
+    var useAnyResource = true           // true = cukup salah satu memenuhi
+                                        // false = semua harus memenuhi
 
     // =====================
     // FARMING SETTINGS
     // =====================
-    var maxNextTaps = 5              // Max skip base sebelum serang
-    var troopsPerSide = 5            // Jumlah troops deploy per sisi
-    var waitBattleSeconds = 180      // Tunggu battle max 3 menit
-    var waitTroopsSeconds = 300      // Tunggu troops training max 5 menit
-    var minGoldToFarm = 100_000L     // Min gold untuk mulai farming
-    var minElixirToFarm = 100_000L   // Min elixir untuk mulai farming
+    var maxNextTaps = 8                 // Max skip base sebelum serang paksa
+    var troopsPerSide = 6               // Troops per sisi
+    var waitBattleSeconds = 200         // Timeout battle
+    var waitTroopsSeconds = 600         // Tunggu troops training max 10 menit
+    var autoUpgradeWall = false         // Auto upgrade wall
+    var enableLootFilter = true         // Aktifkan filter loot
 
-    // Anti-bot delay (random delay range dalam ms)
-    var delayMinMs = 800L
-    var delayMaxMs = 2500L
+    // Anti-bot delay
+    var delayMinMs = 700L
+    var delayMaxMs = 2200L
 
-    // Wall upgrade
-    var autoUpgradeWall = true
-    var minGoldForWall = 1_000_000L  // Min gold sebelum upgrade wall
-
-    /**
-     * Random delay untuk anti-bot detection
-     */
     fun randomDelay(): Long {
         return delayMinMs + (Math.random() * (delayMaxMs - delayMinMs)).toLong()
     }
