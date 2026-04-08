@@ -131,6 +131,7 @@ class BotService : Service() {
                     _state.value = BotState.CHECKING_HOME
                 }
                 BotState.PAUSED -> delay(1000)
+                else -> delay(500)
             }
 
             delay(500)
