@@ -4,13 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.PointF
 import android.util.Log
-import org.opencv.android.Utils
-import org.opencv.core.*
-import org.opencv.imgproc.Imgproc
 
-/**
- * Semua template yang bisa dideteksi
- */
 enum class Template(val fileName: String) {
     HOME_SCREEN("home_screen.png"),
     BTN_ATTACK("btn_attack.png"),
@@ -39,33 +33,17 @@ class TemplateManager(private val context: Context) {
     companion object {
         private const val TAG = "TemplateManager"
         private const val DEFAULT_THRESHOLD = 0.80
-        private const val HIGH_THRESHOLD = 0.90
     }
 
-    private val templateCache = mutableMapOf<Template, Mat>()
+    private val templateCache = mutableMapOf<Template, Bitmap>()
 
-    init {
-        // Load OpenCV
-        System.loadLibrary("opencv_java4")
-    }
-
-    /**
-     * Load template dari assets ke cache
-     */
-    private fun loadTemplate(template: Template): Mat? {
-        if (templateCache.containsKey(template)) {
-            return templateCache[template]
-        }
-
+    private fun loadTemplate(template: Template): Bitmap? {
+        templateCache[template]?.let { return it }
         return try {
             val bitmap = context.assets.open("templates/${template.fileName}")
                 .use { android.graphics.BitmapFactory.decodeStream(it) }
-            val mat = Mat()
-            Utils.bitmapToMat(bitmap, mat)
-            Imgproc.cvtColor(mat, mat, Imgproc.COLOR_RGBA2GRAY)
-            templateCache[template] = mat
-            bitmap.recycle()
-            mat
+            templateCache[template] = bitmap
+            bitmap
         } catch (e: Exception) {
             Log.e(TAG, "Gagal load template: ${template.fileName}", e)
             null
@@ -73,64 +51,74 @@ class TemplateManager(private val context: Context) {
     }
 
     /**
-     * Cari template di screenshot
-     * @return MatchResult dengan posisi tengah template jika ditemukan
+     * Template matching manual tanpa OpenCV
+     * Pakai pixel comparison sederhana
      */
     fun findTemplate(
         screenshot: Bitmap,
         template: Template,
-        threshold: Double = DEFAULT_THRESHOLD,
-        searchRegion: Rect? = null
+        threshold: Double = DEFAULT_THRESHOLD
     ): MatchResult {
-        val templateMat = loadTemplate(template) ?: return MatchResult(false)
+        val tmpl = loadTemplate(template) ?: return MatchResult(false)
 
-        val screenshotMat = Mat()
-        Utils.bitmapToMat(screenshot, screenshotMat)
-        Imgproc.cvtColor(screenshotMat, screenshotMat, Imgproc.COLOR_RGBA2GRAY)
+        val sw = screenshot.width
+        val sh = screenshot.height
+        val tw = tmpl.width
+        val th = tmpl.height
 
-        // Potong region jika ada
-        val searchMat = if (searchRegion != null) {
-            Mat(screenshotMat, searchRegion)
-        } else {
-            screenshotMat
+        if (tw > sw || th > sh) return MatchResult(false)
+
+        var bestScore = 0.0
+        var bestX = 0
+        var bestY = 0
+
+        // Sample setiap 4 pixel biar lebih cepat
+        val step = 4
+        val tmplPixels = IntArray(tw * th)
+        tmpl.getPixels(tmplPixels, 0, tw, 0, 0, tw, th)
+
+        for (y in 0..(sh - th) step step) {
+            for (x in 0..(sw - tw) step step) {
+                val score = calcScore(screenshot, tmplPixels, x, y, tw, th)
+                if (score > bestScore) {
+                    bestScore = score
+                    bestX = x
+                    bestY = y
+                }
+            }
         }
 
-        val result = Mat()
-        Imgproc.matchTemplate(searchMat, templateMat, result, Imgproc.TM_CCOEFF_NORMED)
-
-        val mmResult = Core.minMaxLoc(result)
-        val confidence = mmResult.maxVal
-
-        screenshotMat.release()
-        result.release()
-        if (searchRegion != null) searchMat.release()
-
-        return if (confidence >= threshold) {
-            val matchLoc = mmResult.maxLoc
-            val offsetX = searchRegion?.x?.toDouble() ?: 0.0
-            val offsetY = searchRegion?.y?.toDouble() ?: 0.0
-
-            val centerX = (matchLoc.x + offsetX + templateMat.cols() / 2).toFloat()
-            val centerY = (matchLoc.y + offsetY + templateMat.rows() / 2).toFloat()
-
-            Log.d(TAG, "[SCAN] '${template.fileName}' terdeteksi! (Akurasi: ${"%.1f".format(confidence * 100)}%)")
-            MatchResult(true, PointF(centerX, centerY), confidence)
+        return if (bestScore >= threshold) {
+            Log.d(TAG, "[SCAN] '${template.fileName}' terdeteksi! (Akurasi: ${"%.1f".format(bestScore * 100)}%)")
+            MatchResult(true, PointF((bestX + tw / 2).toFloat(), (bestY + th / 2).toFloat()), bestScore)
         } else {
-            Log.d(TAG, "[SCAN] '${template.fileName}' tidak ditemukan (${("%.1f".format(confidence * 100))}%)")
+            Log.d(TAG, "[SCAN] '${template.fileName}' tidak ditemukan (${"%.1f".format(bestScore * 100)}%)")
             MatchResult(false)
         }
     }
 
-    /**
-     * Cek apakah template ada di layar (tanpa butuh posisi)
-     */
+    private fun calcScore(screenshot: Bitmap, tmplPixels: IntArray, offX: Int, offY: Int, tw: Int, th: Int): Double {
+        var match = 0
+        var total = 0
+        val step = 4
+        for (ty in 0 until th step step) {
+            for (tx in 0 until tw step step) {
+                val tp = tmplPixels[ty * tw + tx]
+                val sp = screenshot.getPixel(offX + tx, offY + ty)
+                val dr = Math.abs(android.graphics.Color.red(tp) - android.graphics.Color.red(sp))
+                val dg = Math.abs(android.graphics.Color.green(tp) - android.graphics.Color.green(sp))
+                val db = Math.abs(android.graphics.Color.blue(tp) - android.graphics.Color.blue(sp))
+                if (dr + dg + db < 60) match++
+                total++
+            }
+        }
+        return if (total == 0) 0.0 else match.toDouble() / total
+    }
+
     fun isVisible(screenshot: Bitmap, template: Template, threshold: Double = DEFAULT_THRESHOLD): Boolean {
         return findTemplate(screenshot, template, threshold).found
     }
 
-    /**
-     * Cari beberapa template sekaligus, return yang pertama ditemukan
-     */
     fun findAny(screenshot: Bitmap, vararg templates: Template): Pair<Template?, MatchResult> {
         for (template in templates) {
             val result = findTemplate(screenshot, template)
@@ -139,18 +127,8 @@ class TemplateManager(private val context: Context) {
         return Pair(null, MatchResult(false))
     }
 
-    /**
-     * OCR sederhana untuk baca angka resource
-     * Menggunakan region tertentu dari screenshot
-     */
-    fun readResourceValue(screenshot: Bitmap, region: Rect): Long {
-        // TODO: Implementasi OCR dengan ML Kit atau Tesseract
-        // Untuk sekarang return 0 dulu
-        return 0L
-    }
-
     fun clearCache() {
-        templateCache.values.forEach { it.release() }
+        templateCache.values.forEach { it.recycle() }
         templateCache.clear()
     }
 }
