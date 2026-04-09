@@ -4,7 +4,6 @@ import android.app.*
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.cocbot.BotConfig
 import com.cocbot.BotLogger
@@ -22,23 +21,15 @@ import kotlinx.coroutines.flow.StateFlow
 class BotService : Service() {
 
     companion object {
-        private const val TAG = "BotService"
         private const val NOTIF_ID = 1002
         private const val NOTIF_CHANNEL = "bot_service"
-
         private var instance: BotService? = null
         fun getInstance(): BotService? = instance
-
-        fun start(context: Context) {
-            context.startForegroundService(Intent(context, BotService::class.java))
-        }
-
-        fun stop(context: Context) {
-            context.stopService(Intent(context, BotService::class.java))
-        }
+        fun start(context: Context) = context.startForegroundService(Intent(context, BotService::class.java))
+        fun stop(context: Context) = context.stopService(Intent(context, BotService::class.java))
     }
 
-    private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private lateinit var templateManager: TemplateManager
     private lateinit var lootScanner: LootScanner
 
@@ -53,10 +44,17 @@ class BotService : Service() {
 
     private var botJob: Job? = null
     private var isPaused = false
-    private var currentMatchNumber = 0
+    private var matchCount = 0
     private var nextTapCount = 0
     private var battleStartTime = 0L
     private var troopsWaitStart = 0L
+
+    // Track current phase dalam battle flow
+    private var battlePhase = BattlePhase.NONE
+
+    enum class BattlePhase {
+        NONE, MENU_OPENED, SEARCHING, SCOUTING, DEPLOYING, FIGHTING, RESULT
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -67,7 +65,7 @@ class BotService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIF_ID, buildNotification("Bot berjalan..."))
+        startForeground(NOTIF_ID, buildNotification())
         return START_STICKY
     }
 
@@ -75,249 +73,264 @@ class BotService : Service() {
         if (botJob?.isActive == true) return
         isPaused = false
         _session.value = FarmSession()
+        battlePhase = BattlePhase.NONE
         BotLogger.system("Bot farming dimulai")
-        botJob = serviceScope.launch { runBotLoop() }
+        botJob = scope.launch { runLoop() }
     }
 
     fun stopBot() {
         botJob?.cancel()
         _state.value = BotState.IDLE
+        battlePhase = BattlePhase.NONE
         val s = _session.value
         BotLogger.system("Bot dihentikan. Total match: ${s.totalMatches}")
         BotLogger.rekap("TOTAL -> G: ${"%,d".format(s.totalGold)} | E: ${"%,d".format(s.totalElixir)} | DE: ${s.totalDarkElixir}")
     }
 
-    fun pauseBot() {
-        isPaused = true
-        _state.value = BotState.PAUSED
-        BotLogger.system("Bot di-pause")
-    }
+    fun pauseBot() { isPaused = true; _state.value = BotState.PAUSED; BotLogger.system("Bot di-pause") }
+    fun resumeBot() { isPaused = false; BotLogger.system("Bot dilanjutkan") }
 
-    fun resumeBot() {
-        isPaused = false
-        BotLogger.system("Bot dilanjutkan")
-    }
-
-    private suspend fun runBotLoop() {
+    private suspend fun runLoop() {
         while (currentCoroutineContext().isActive) {
             if (isPaused) { delay(1000); continue }
 
-            val screenshot = ScreenCaptureService.getInstance()?.captureScreen()
-            if (screenshot == null) {
-                BotLogger.error("Gagal ambil screenshot")
-                delay(2000)
-                continue
-            }
-
-            val accessibility = AccessibilityBot.instance
-            if (accessibility == null) {
+            val acc = AccessibilityBot.instance
+            if (acc == null) {
                 BotLogger.error("AccessibilityService tidak aktif!")
                 delay(3000)
                 continue
             }
 
+            val screenshot = ScreenCaptureService.getInstance()?.captureScreen()
+            if (screenshot == null) {
+                BotLogger.error("Gagal ambil screenshot - pastikan COC di foreground")
+                delay(2000)
+                continue
+            }
+
             when (_state.value) {
                 BotState.IDLE -> _state.value = BotState.CHECKING_HOME
-                BotState.CHECKING_HOME -> stateCheckHome(accessibility)
-                BotState.CHECKING_RESOURCES -> stateCheckResources()
-                BotState.OPENING_ATTACK -> stateOpenAttack(accessibility)
-                BotState.FINDING_MATCH -> stateFindMatch(accessibility)
-                BotState.SEARCHING -> stateSearching(accessibility)
-                BotState.SCOUTING -> stateScouting(screenshot, accessibility)
-                BotState.DEPLOYING_TROOPS -> stateDeployTroops(accessibility)
-                BotState.WAITING_BATTLE -> stateWaitBattle(screenshot, accessibility)
-                BotState.READING_RESULT -> stateReadResult(screenshot, accessibility)
-                BotState.RETURNING_HOME -> stateReturnHome(accessibility)
-                BotState.WAITING_TROOPS -> stateWaitTroops()
+
+                BotState.CHECKING_HOME -> {
+                    BotLogger.info("Tombol Home ditemukan.")
+                    delay(BotConfig.randomDelay())
+                    _state.value = BotState.OPENING_ATTACK
+                }
+
+                BotState.OPENING_ATTACK -> {
+                    BotLogger.info("Men-tap tombol Serang!")
+                    acc.tap(BotConfig.BTN_ATTACK)
+                    delay(BotConfig.delayMenuLoad) // tunggu menu attack muncul
+                    battlePhase = BattlePhase.MENU_OPENED
+                    _state.value = BotState.FINDING_MATCH
+                }
+
+                BotState.FINDING_MATCH -> {
+                    BotLogger.menu("Memulai Cari Lawan Tanding...")
+                    acc.tap(BotConfig.BTN_FIND_MATCH)
+                    delay(BotConfig.delayMatchLoad) // tunggu matchmaking
+                    nextTapCount = 0
+                    battlePhase = BattlePhase.SEARCHING
+                    _state.value = BotState.SEARCHING
+                }
+
+                BotState.SEARCHING -> {
+                    BotLogger.info("Mencari lawan...")
+                    // Tunggu base musuh muncul (ada tombol Next/Berikutnya)
+                    delay(3000)
+                    battlePhase = BattlePhase.SCOUTING
+                    _state.value = BotState.SCOUTING
+                }
+
+                BotState.SCOUTING -> {
+                    if (BotConfig.enableLootFilter) {
+                        BotLogger.info("Memindai loot lawan...")
+                        val loot = lootScanner.scanLoot(screenshot)
+                        _currentLoot.value = loot
+                        BotLogger.scan("Loot: G=${"%,d".format(loot.gold)} | E=${"%,d".format(loot.elixir)} | DE=${loot.darkElixir}")
+
+                        val ok = checkLootTarget(loot)
+
+                        if (!ok && nextTapCount < BotConfig.maxNextTaps) {
+                            nextTapCount++
+                            BotLogger.info("Loot kurang, skip... ($nextTapCount/${BotConfig.maxNextTaps})")
+                            acc.tap(BotConfig.BTN_NEXT)
+                            delay(BotConfig.delayMatchLoad)
+                            return@when // tetap SCOUTING
+                        }
+
+                        if (nextTapCount >= BotConfig.maxNextTaps) {
+                            BotLogger.warning("Max skip, serang paksa!")
+                        } else {
+                            BotLogger.info("Loot OK! Mulai serang!")
+                        }
+                    }
+
+                    // Tap tombol Serang! hijau di layar army
+                    BotLogger.action("Men-tap Serang! (konfirmasi)")
+                    acc.tap(BotConfig.BTN_ATTACK_CONFIRM)
+                    delay(BotConfig.delayMenuLoad)
+
+                    nextTapCount = 0
+                    _state.value = BotState.DEPLOYING_TROOPS
+                }
+
+                BotState.DEPLOYING_TROOPS -> {
+                    matchCount++
+                    battleStartTime = System.currentTimeMillis()
+
+                    val pre = BotConfig.randomDelay()
+                    BotLogger.antibot("Jeda organik: ${String.format("%.3f", pre/1000.0)} detik...")
+                    delay(pre)
+
+                    BotLogger.action("Deploy pasukan ke 4 sisi")
+                    deployTroops(acc)
+
+                    battlePhase = BattlePhase.FIGHTING
+                    _state.value = BotState.WAITING_BATTLE
+                }
+
+                BotState.WAITING_BATTLE -> {
+                    val elapsed = (System.currentTimeMillis() - battleStartTime) / 1000
+                    BotLogger.wait("Menunggu $elapsed detik di Home sebelum langkah selanjutnya...")
+
+                    // Cek battle result
+                    val resultVisible = templateManager.isVisible(screenshot, Template.BATTLE_RESULT)
+                    if (resultVisible) {
+                        BotLogger.info("Battle selesai!")
+                        _state.value = BotState.READING_RESULT
+                        return@when
+                    }
+
+                    // Timeout
+                    if (elapsed > BotConfig.waitBattleSeconds) {
+                        BotLogger.warning("Battle timeout, surrender...")
+                        acc.tap(BotConfig.BTN_END_BATTLE)
+                        delay(1500)
+                        acc.tap(BotConfig.BTN_OKAY)
+                        delay(2000)
+                        _state.value = BotState.READING_RESULT
+                        return@when
+                    }
+
+                    delay(BotConfig.delayBattleCheck.toLong())
+                }
+
+                BotState.READING_RESULT -> {
+                    BotLogger.info("Memindai statistik loot dari layar Battle Result...")
+                    val loot = lootScanner.scanLoot(screenshot)
+
+                    val result = FarmResult(matchCount, loot.gold, loot.elixir, loot.darkElixir)
+                    val sess = _session.value
+                    sess.addResult(result)
+                    _session.value = sess
+
+                    BotLogger.rekap(
+                        "Pertandingan #$matchCount -> " +
+                        "G: +${"%,d".format(loot.gold)} | " +
+                        "E: +${"%,d".format(loot.elixir)} | " +
+                        "DE: +${loot.darkElixir}"
+                    )
+
+                    // Tap OK untuk tutup result
+                    acc.tap(BotConfig.BTN_OKAY)
+                    delay(1500)
+                    acc.tap(BotConfig.BTN_RETURN_HOME)
+                    delay(BotConfig.randomDelay())
+
+                    BotLogger.info("Selesai serang. Counter saat ini: $matchCount")
+                    BotLogger.wait("Menunggu 3 detik di Home sebelum langkah selanjutnya...")
+                    delay(3000)
+
+                    battlePhase = BattlePhase.NONE
+                    _state.value = BotState.CHECKING_HOME
+                }
+
+                BotState.RETURNING_HOME -> {
+                    acc.tap(BotConfig.BTN_RETURN_HOME)
+                    delay(BotConfig.randomDelay())
+                    delay(3000)
+                    _state.value = BotState.CHECKING_HOME
+                }
+
+                BotState.WAITING_TROOPS -> {
+                    if (troopsWaitStart == 0L) troopsWaitStart = System.currentTimeMillis()
+                    val elapsed = (System.currentTimeMillis() - troopsWaitStart) / 1000
+                    BotLogger.wait("Menunggu troops training... ${elapsed}s")
+                    if (elapsed > BotConfig.waitTroopsSeconds) {
+                        troopsWaitStart = 0L
+                        _state.value = BotState.OPENING_ATTACK
+                    }
+                    delay(10000)
+                }
+
                 BotState.ERROR -> {
                     BotLogger.error("State ERROR, recovery...")
                     delay(5000)
+                    battlePhase = BattlePhase.NONE
                     _state.value = BotState.CHECKING_HOME
                 }
+
                 BotState.PAUSED -> delay(1000)
                 else -> delay(500)
             }
-            delay(500)
+
+            delay(300)
         }
     }
 
-    private suspend fun stateCheckHome(accessibility: AccessibilityBot) {
-        BotLogger.info("Tombol Home ditemukan.")
-        delay(BotConfig.randomDelay())
-        _state.value = BotState.CHECKING_RESOURCES
-    }
-
-    private suspend fun stateCheckResources() {
-        BotLogger.info("Memeriksa resources...")
-        // Cek troops siap via koordinat (tidak pakai template)
-        // Langsung ke attack
-        _state.value = BotState.OPENING_ATTACK
-    }
-
-    private suspend fun stateOpenAttack(accessibility: AccessibilityBot) {
-        BotLogger.info("Men-tap tombol Serang!")
-        accessibility.tap(BotConfig.BTN_ATTACK)
-        delay(BotConfig.randomDelay())
-        delay(1500) // tunggu menu attack muncul
-        _state.value = BotState.FINDING_MATCH
-    }
-
-    private suspend fun stateFindMatch(accessibility: AccessibilityBot) {
-        BotLogger.menu("Memulai Cari Lawan Tanding...")
-        accessibility.tap(BotConfig.BTN_FIND_MATCH)
-        delay(BotConfig.randomDelay())
-        delay(3000) // tunggu loading matchmaking
-        nextTapCount = 0
-        _state.value = BotState.SEARCHING
-    }
-
-    private suspend fun stateSearching(accessibility: AccessibilityBot) {
-        BotLogger.info("Mencari lawan...")
-        // Tunggu base musuh muncul
-        delay(4000)
-        _state.value = BotState.SCOUTING
-    }
-
-    private suspend fun stateScouting(
-        screenshot: android.graphics.Bitmap,
-        accessibility: AccessibilityBot
-    ) {
-        // Scan loot jika filter aktif
-        if (BotConfig.enableLootFilter) {
-            BotLogger.info("Memindai loot lawan...")
-            val loot = lootScanner.scanLoot(screenshot)
-            _currentLoot.value = loot
-            BotLogger.scan("Loot: $loot")
-
-            val meetsTarget = if (BotConfig.useAnyResource) {
-                loot.gold >= BotConfig.minGoldTarget ||
-                loot.elixir >= BotConfig.minElixirTarget ||
-                (BotConfig.minDarkElixirTarget > 0 && loot.darkElixir >= BotConfig.minDarkElixirTarget)
-            } else {
-                loot.gold >= BotConfig.minGoldTarget &&
-                loot.elixir >= BotConfig.minElixirTarget
-            }
-
-            if (!meetsTarget && nextTapCount < BotConfig.maxNextTaps) {
-                BotLogger.info("Loot kurang (${loot}), skip ke base berikutnya... ($nextTapCount/${BotConfig.maxNextTaps})")
-                nextTapCount++
-                accessibility.tap(BotConfig.BTN_NEXT)
-                delay(BotConfig.randomDelay())
-                delay(3000)
-                // Tetap di SCOUTING untuk scan loot base berikutnya
-                return
-            }
-
-            if (nextTapCount >= BotConfig.maxNextTaps) {
-                BotLogger.warning("Max skip tercapai, serang base ini")
-            } else {
-                BotLogger.info("Loot OK! (${loot}), mulai serang!")
-            }
+    private fun checkLootTarget(loot: LootData): Boolean {
+        return if (BotConfig.useAnyResource) {
+            loot.gold >= BotConfig.minGoldTarget ||
+            loot.elixir >= BotConfig.minElixirTarget ||
+            (BotConfig.minDarkElixirTarget > 0 && loot.darkElixir >= BotConfig.minDarkElixirTarget)
+        } else {
+            loot.gold >= BotConfig.minGoldTarget &&
+            loot.elixir >= BotConfig.minElixirTarget
         }
-
-        nextTapCount = 0
-        _state.value = BotState.DEPLOYING_TROOPS
     }
 
-    private suspend fun stateDeployTroops(accessibility: AccessibilityBot) {
-        currentMatchNumber++
-        battleStartTime = System.currentTimeMillis()
+    private suspend fun deployTroops(acc: AccessibilityBot) {
+        val n = BotConfig.troopsPerSide
 
-        val preDeploy = BotConfig.randomDelay()
-        BotLogger.antibot("Jeda organik: ${String.format("%.3f", preDeploy / 1000.0)} detik...")
-        delay(preDeploy)
-
-        BotLogger.action("Deploy pasukan ke 4 sisi")
-        accessibility.deployAllSides(BotConfig.troopsPerSide)
-
-        _state.value = BotState.WAITING_BATTLE
-    }
-
-    private suspend fun stateWaitBattle(
-        screenshot: android.graphics.Bitmap,
-        accessibility: AccessibilityBot
-    ) {
-        val elapsed = (System.currentTimeMillis() - battleStartTime) / 1000
-        BotLogger.wait("Menunggu $elapsed detik di Home sebelum langkah selanjutnya...")
-
-        // Cek battle result via template
-        val resultVisible = templateManager.isVisible(screenshot, Template.BATTLE_RESULT)
-        if (resultVisible) {
-            BotLogger.info("Battle selesai!")
-            _state.value = BotState.READING_RESULT
-            return
+        // Top - kiri ke kanan
+        BotLogger.action("Deploy sisi atas")
+        val topStep = (BotConfig.DEPLOY_TOP_END.x - BotConfig.DEPLOY_TOP_START.x) / n
+        for (i in 0 until n) {
+            acc.tap(BotConfig.DEPLOY_TOP_START.x + topStep * i, BotConfig.DEPLOY_TOP_START.y)
+            delay(150)
         }
+        delay(300)
 
-        // Timeout surrender
-        if (elapsed > BotConfig.waitBattleSeconds) {
-            BotLogger.warning("Battle timeout, surrender...")
-            accessibility.tap(BotConfig.BTN_END_BATTLE)
-            delay(2000)
-            accessibility.tap(BotConfig.BTN_OKAY)
-            delay(2000)
+        // Bottom - kiri ke kanan
+        BotLogger.action("Deploy sisi bawah")
+        val botStep = (BotConfig.DEPLOY_BOTTOM_END.x - BotConfig.DEPLOY_BOTTOM_START.x) / n
+        for (i in 0 until n) {
+            acc.tap(BotConfig.DEPLOY_BOTTOM_START.x + botStep * i, BotConfig.DEPLOY_BOTTOM_START.y)
+            delay(150)
         }
+        delay(300)
 
-        delay(2000)
-    }
-
-    private suspend fun stateReadResult(
-        screenshot: android.graphics.Bitmap,
-        accessibility: AccessibilityBot
-    ) {
-        BotLogger.info("Memindai statistik loot dari layar Battle Result...")
-
-        // Scan loot hasil battle
-        val loot = lootScanner.scanLoot(screenshot)
-
-        val result = FarmResult(
-            matchNumber = currentMatchNumber,
-            goldGained = loot.gold,
-            elixirGained = loot.elixir,
-            darkElixirGained = loot.darkElixir
-        )
-
-        val session = _session.value
-        session.addResult(result)
-        _session.value = session
-
-        BotLogger.rekap(
-            "Pertandingan #$currentMatchNumber -> " +
-            "G: +${"%,d".format(loot.gold)} | " +
-            "E: +${"%,d".format(loot.elixir)} | " +
-            "DE: +${loot.darkElixir}"
-        )
-
-        // Tap OK/close result
-        accessibility.tap(BotConfig.BTN_OKAY)
-        delay(BotConfig.randomDelay())
-        delay(2000)
-
-        _state.value = BotState.RETURNING_HOME
-    }
-
-    private suspend fun stateReturnHome(accessibility: AccessibilityBot) {
-        BotLogger.action("Men-tap koordinat Kembali ke Rumah")
-        accessibility.tap(BotConfig.BTN_RETURN_HOME)
-        delay(BotConfig.randomDelay())
-        BotLogger.info("Selesai serang. Counter saat ini: $currentMatchNumber")
-        BotLogger.wait("Menunggu 3 detik di Home sebelum langkah selanjutnya...")
-        delay(3000)
-        _state.value = BotState.CHECKING_HOME
-    }
-
-    private suspend fun stateWaitTroops() {
-        if (troopsWaitStart == 0L) troopsWaitStart = System.currentTimeMillis()
-        val elapsed = (System.currentTimeMillis() - troopsWaitStart) / 1000
-        BotLogger.wait("Menunggu troops training... ${elapsed}s")
-        if (elapsed > BotConfig.waitTroopsSeconds) {
-            troopsWaitStart = 0L
-            _state.value = BotState.OPENING_ATTACK
+        // Left - atas ke bawah
+        BotLogger.action("Deploy sisi kiri")
+        val leftStep = (BotConfig.DEPLOY_LEFT_END.y - BotConfig.DEPLOY_LEFT_START.y) / n
+        for (i in 0 until n) {
+            acc.tap(BotConfig.DEPLOY_LEFT_START.x, BotConfig.DEPLOY_LEFT_START.y + leftStep * i)
+            delay(150)
         }
-        delay(10000)
+        delay(300)
+
+        // Right - atas ke bawah
+        BotLogger.action("Deploy sisi kanan")
+        val rightStep = (BotConfig.DEPLOY_RIGHT_END.y - BotConfig.DEPLOY_RIGHT_START.y) / n
+        for (i in 0 until n) {
+            acc.tap(BotConfig.DEPLOY_RIGHT_START.x, BotConfig.DEPLOY_RIGHT_START.y + rightStep * i)
+            delay(150)
+        }
     }
 
     override fun onDestroy() {
-        serviceScope.cancel()
+        scope.cancel()
         lootScanner.close()
         instance = null
         super.onDestroy()
@@ -326,16 +339,14 @@ class BotService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun createNotificationChannel() {
-        val channel = NotificationChannel(NOTIF_CHANNEL, "Bot Service", NotificationManager.IMPORTANCE_LOW)
-        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        val ch = NotificationChannel(NOTIF_CHANNEL, "Bot Service", NotificationManager.IMPORTANCE_LOW)
+        getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
     }
 
-    private fun buildNotification(text: String): Notification {
-        return NotificationCompat.Builder(this, NOTIF_CHANNEL)
-            .setContentTitle("COC Bot Farming")
-            .setContentText(text)
-            .setSmallIcon(android.R.drawable.ic_menu_compass)
-            .setOngoing(true)
-            .build()
-    }
+    private fun buildNotification() = NotificationCompat.Builder(this, NOTIF_CHANNEL)
+        .setContentTitle("COC Bot Farming")
+        .setContentText("Bot aktif")
+        .setSmallIcon(android.R.drawable.ic_menu_compass)
+        .setOngoing(true)
+        .build()
 }
