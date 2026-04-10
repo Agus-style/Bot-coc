@@ -4,7 +4,7 @@ import android.graphics.PointF
 
 /**
  * Koordinat landscape 1612x720 (Infinix Hot 40i)
- * COC dimainkan landscape
+ * Semua koordinat dari Pointer Location
  */
 object BotConfig {
 
@@ -15,33 +15,35 @@ object BotConfig {
     // Home screen
     val BTN_ATTACK = PointF(100f, 648f)           // Tombol Serang! kiri bawah home
 
-    // Menu attack (setelah tap Serang!)
-    val BTN_MULTIPLAYER = PointF(250f, 300f)      // Tab Multipemain
-    val BTN_FIND_MATCH = PointF(250f, 490f)       // Cari Lawan Tanding (tombol kuning)
+    // Menu attack → Tab Multipemain → Cari Lawan Tanding
+    val BTN_FIND_MATCH = PointF(281f, 528f)       // Cari Lawan Tanding (X:281, Y:528)
 
     // Layar scouting base musuh
-    val BTN_NEXT = PointF(1496f, 510f)            // Berikutnya (kanan bawah)
-    val BTN_ATTACK_CONFIRM = PointF(1327f, 659f))  // Serang! hijau (kanan bawah army screen)
+    val BTN_NEXT = PointF(1427f, 500f)            // Berikutnya (X:1427, Y:500)
+    val BTN_ATTACK_CONFIRM = PointF(1320f, 642f)  // Serang! hijau army screen (X:1320, Y:642)
 
-    // Battle
-    val BTN_END_BATTLE = PointF(110f, 512f)       // Akhiri Serangan (merah kiri)
-    val BTN_RETURN_HOME = PointF(760f, 580f)      // Kembali ke Rumah
+    // Battle screen
+    val BTN_END_BATTLE = PointF(159f, 544f)       // Akhiri Serangan (X:159, Y:544)
+
+    // Result screen
+    val BTN_RETURN_HOME = PointF(814f, 624f)      // Ke Beranda (X:814, Y:624)
     val BTN_OKAY = PointF(760f, 500f)             // OK generic
-    val BTN_CLOSE_X = PointF(1390f, 55f)          // Tombol X merah tutup panel
+    val BTN_CLOSE_X = PointF(1390f, 55f)          // Tombol X merah
 
     // =====================
     // AREA DEPLOY TROOPS
     // Landscape 1612x720
+    // Area battle = tengah layar
+    // Deploy di tepi luar base musuh
     // =====================
-    // Deploy di 4 sisi tepi layar
     val DEPLOY_TOP_START = PointF(300f, 75f)
     val DEPLOY_TOP_END = PointF(1300f, 75f)
-    val DEPLOY_BOTTOM_START = PointF(300f, 645f)
-    val DEPLOY_BOTTOM_END = PointF(1300f, 645f)
+    val DEPLOY_BOTTOM_START = PointF(300f, 560f)
+    val DEPLOY_BOTTOM_END = PointF(1300f, 560f)
     val DEPLOY_LEFT_START = PointF(75f, 150f)
-    val DEPLOY_LEFT_END = PointF(75f, 570f)
+    val DEPLOY_LEFT_END = PointF(75f, 480f)
     val DEPLOY_RIGHT_START = PointF(1537f, 150f)
-    val DEPLOY_RIGHT_END = PointF(1537f, 570f)
+    val DEPLOY_RIGHT_END = PointF(1537f, 480f)
 
     // =====================
     // LOOT FILTER
@@ -49,20 +51,20 @@ object BotConfig {
     var minGoldTarget = 300_000L
     var minElixirTarget = 300_000L
     var minDarkElixirTarget = 0L
-    var useAnyResource = true           // true = cukup salah satu
+    var useAnyResource = true
     var enableLootFilter = true
-    var maxNextTaps = 8                 // Max skip sebelum serang paksa
+    var maxNextTaps = 8
 
     // =====================
     // TIMING (ms)
     // =====================
-    var delayAfterTap = 800L            // Delay setelah tap biasa
-    var delayMenuLoad = 2000L           // Tunggu menu muncul
-    var delayMatchLoad = 5000L          // Tunggu matchmaking
-    var delayBattleCheck = 2000L        // Interval cek battle selesai
-    var waitBattleSeconds = 200         // Max tunggu battle
-    var waitTroopsSeconds = 600         // Max tunggu troops
-    var troopsPerSide = 5               // Troops per sisi
+    var delayAfterTap = 800L
+    var delayMenuLoad = 2000L
+    var delayMatchLoad = 5000L
+    var delayBattleCheck = 2000
+    var waitBattleSeconds = 200
+    var waitTroopsSeconds = 600
+    var troopsPerSide = 5
 
     // Anti-bot random delay
     var delayMinMs = 500L
