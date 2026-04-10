@@ -21,7 +21,7 @@ object BotConfig {
 
     // Layar scouting base musuh
     val BTN_NEXT = PointF(1496f, 510f)            // Berikutnya (kanan bawah)
-    val BTN_ATTACK_CONFIRM = PointF(1290f, 615f)  // Serang! hijau (kanan bawah army screen)
+    val BTN_ATTACK_CONFIRM = PointF(1327f, 659f))  // Serang! hijau (kanan bawah army screen)
 
     // Battle
     val BTN_END_BATTLE = PointF(110f, 512f)       // Akhiri Serangan (merah kiri)
