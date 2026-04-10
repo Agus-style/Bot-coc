@@ -17,11 +17,11 @@ object BotConfig {
 
     // Menu attack (setelah tap Serang!)
     val BTN_MULTIPLAYER = PointF(250f, 300f)      // Tab Multipemain
-    val BTN_FIND_MATCH = PointF(250f, 505f)       // Cari Lawan Tanding (tombol kuning)
+    val BTN_FIND_MATCH = PointF(250f, 490f)       // Cari Lawan Tanding (tombol kuning)
 
     // Layar scouting base musuh
     val BTN_NEXT = PointF(1496f, 510f)            // Berikutnya (kanan bawah)
-    val BTN_ATTACK_CONFIRM = PointF(1290f, 600f)  // Serang! hijau (kanan bawah army screen)
+    val BTN_ATTACK_CONFIRM = PointF(1290f, 615f)  // Serang! hijau (kanan bawah army screen)
 
     // Battle
     val BTN_END_BATTLE = PointF(110f, 512f)       // Akhiri Serangan (merah kiri)
