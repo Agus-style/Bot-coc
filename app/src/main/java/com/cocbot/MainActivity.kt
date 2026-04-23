@@ -2,11 +2,15 @@ package com.cocbot
 
 import android.app.Activity
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
 import android.provider.Settings
 import android.view.Gravity
 import android.widget.*
@@ -17,6 +21,8 @@ import com.cocbot.service.*
 import com.cocbot.state.BotState
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import java.io.File
+import java.io.FileOutputStream
 
 class MainActivity : AppCompatActivity() {
 
@@ -27,6 +33,17 @@ class MainActivity : AppCompatActivity() {
     private lateinit var scrollLog: ScrollView
     private lateinit var btnPause: Button
     private lateinit var tabContent: LinearLayout
+
+    // Untuk pilih gambar dari galeri
+    private var currentTemplateTarget: String = ""
+    private val imagePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val uri = result.data?.data ?: return@registerForActivityResult
+            saveTemplateFromUri(uri, currentTemplateTarget)
+        }
+    }
 
     private val projectionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -45,7 +62,6 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(buildUI())
         observeBot()
-        checkPermissions()
     }
 
     private fun buildUI(): android.view.View {
@@ -79,11 +95,11 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             setBackgroundColor(Color.parseColor("#16213e"))
         }
-        val tabs = listOf("Start", "Settings", "Army", "Kalibrasi")
+        val tabs = listOf("START", "SETTINGS", "ARMY", "KALIBRASI")
         val tabBtns = tabs.map { name ->
             Button(this).apply {
                 text = name
-                textSize = 12f
+                textSize = 11f
                 setTextColor(Color.parseColor("#888888"))
                 setBackgroundColor(Color.TRANSPARENT)
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
@@ -92,7 +108,6 @@ class MainActivity : AppCompatActivity() {
         tabBtns.forEach { tabBar.addView(it) }
         root.addView(tabBar)
 
-        // Tab content
         tabContent = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(
@@ -100,16 +115,13 @@ class MainActivity : AppCompatActivity() {
         }
         root.addView(tabContent)
 
-        // Setup tab switching
         tabBtns[0].setOnClickListener { showStartTab(); highlightTab(tabBtns, 0) }
         tabBtns[1].setOnClickListener { showSettingsTab(); highlightTab(tabBtns, 1) }
         tabBtns[2].setOnClickListener { showArmyTab(); highlightTab(tabBtns, 2) }
         tabBtns[3].setOnClickListener { showCalibrationTab(); highlightTab(tabBtns, 3) }
 
-        // Show start tab by default
         showStartTab()
         highlightTab(tabBtns, 0)
-
         return root
     }
 
@@ -127,23 +139,16 @@ class MainActivity : AppCompatActivity() {
             setPadding(16, 16, 16, 16)
         }
 
-        // Permissions status
         ll.addView(sectionHeader("REQUIRED PERMISSIONS"))
-
         val overlayOk = Settings.canDrawOverlays(this)
-        ll.addView(permissionRow("Overlay (Floating Window)",
-            overlayOk, "Grant") {
-            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:$packageName")))
+        ll.addView(permissionRow("Overlay (Floating Window)", overlayOk, "Grant") {
+            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
         })
-
         val accOk = AccessibilityBot.instance != null
-        ll.addView(permissionRow("Accessibility Service",
-            accOk, "Buka Settings") {
+        ll.addView(permissionRow("Accessibility Service", accOk, "Buka Settings") {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         })
 
-        // Status bar
         tvStatus = TextView(this).apply {
             text = "Status: IDLE"
             textSize = 14f
@@ -153,7 +158,7 @@ class MainActivity : AppCompatActivity() {
         ll.addView(tvStatus)
 
         tvStats = TextView(this).apply {
-            text = "🏆 Match: 0  💛 Gold: 0  💜 Elixir: 0  🖤 DE: 0"
+            text = "🏆 Match: 0  💛 Gold: 0  💜 Elixir: 0"
             textSize = 12f
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.parseColor("#16213e"))
@@ -170,12 +175,10 @@ class MainActivity : AppCompatActivity() {
         }
         ll.addView(tvLoot)
 
-        // Control buttons
         val btnRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, 12, 0, 8)
         }
-
         btnRow.addView(Button(this).apply {
             text = "▶ START"
             setBackgroundColor(Color.parseColor("#00AA44"))
@@ -183,7 +186,6 @@ class MainActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = 6 }
             setOnClickListener { startBot() }
         })
-
         btnPause = Button(this).apply {
             text = "⏸ PAUSE"
             setBackgroundColor(Color.parseColor("#FF8800"))
@@ -192,7 +194,6 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { togglePause() }
         }
         btnRow.addView(btnPause)
-
         btnRow.addView(Button(this).apply {
             text = "⏹ STOP"
             setBackgroundColor(Color.parseColor("#CC0000"))
@@ -202,7 +203,6 @@ class MainActivity : AppCompatActivity() {
         })
         ll.addView(btnRow)
 
-        // Log
         ll.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(TextView(this@MainActivity).apply {
@@ -230,15 +230,12 @@ class MainActivity : AppCompatActivity() {
             setPadding(12, 12, 12, 12)
             typeface = Typeface.MONOSPACE
         }
-
         scrollLog = ScrollView(this).apply {
             setBackgroundColor(Color.parseColor("#0d0d1a"))
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 600)
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 600)
             addView(tvLog)
         }
         ll.addView(scrollLog)
-
         sv.addView(ll)
         tabContent.addView(sv)
         observeBot()
@@ -253,25 +250,24 @@ class MainActivity : AppCompatActivity() {
         }
 
         ll.addView(sectionHeader("1. LOOTING TARGET"))
-
         val etGold = inputRow(ll, "Min Gold", BotConfig.minGoldTarget.toString())
         val etElixir = inputRow(ll, "Min Elixir", BotConfig.minElixirTarget.toString())
         val etDark = inputRow(ll, "Min Dark Elixir", BotConfig.minDarkElixirTarget.toString())
 
-        // Gold OR Elixir toggle
         val cbAny = CheckBox(this).apply {
             text = "Gold OR Elixir (salah satu cukup)"
             isChecked = BotConfig.useAnyResource
             setTextColor(Color.WHITE)
-            setOnCheckedChangeListener { _, c -> BotConfig.useAnyResource = c }
         }
         ll.addView(cbAny)
 
         ll.addView(sectionHeader("2. ATTACK STRATEGY"))
-        val strategies = listOf("All Sides", "Top Bottom", "Left Right")
+        val strategies = listOf("All Sides (4 sisi)", "Top Bottom", "Left Right")
         val spinner = Spinner(this).apply {
-            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_item, strategies)
-            setSelection(BotConfig.attackStrategy.ordinal.coerceAtMost(2))
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_item, strategies).also {
+                it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            }
+            setBackgroundColor(Color.parseColor("#16213e"))
         }
         ll.addView(spinner)
 
@@ -310,16 +306,17 @@ class MainActivity : AppCompatActivity() {
                 BotConfig.minGoldTarget = etGold.text.toString().toLongOrNull() ?: 300_000L
                 BotConfig.minElixirTarget = etElixir.text.toString().toLongOrNull() ?: 300_000L
                 BotConfig.minDarkElixirTarget = etDark.text.toString().toLongOrNull() ?: 0L
+                BotConfig.useAnyResource = cbAny.isChecked
                 BotConfig.autoWallUpgrade = cbWall.isChecked
                 BotConfig.autoEndBattle = cbEnd.isChecked
                 BotConfig.autoCollect = cbCollect.isChecked
-                BotConfig.attackStrategy = when(spinner.selectedItemPosition) {
+                BotConfig.attackStrategy = when (spinner.selectedItemPosition) {
                     1 -> AttackStrategy.TOP_BOTTOM
                     2 -> AttackStrategy.LEFT_RIGHT
                     else -> AttackStrategy.ALL_SIDES
                 }
-                val maxDelay = etDelay.text.toString().toIntOrNull() ?: 5
-                BotConfig.delayMaxMs = (maxDelay * 1000).toLong()
+                BotConfig.maxRandomDelay = etDelay.text.toString().toIntOrNull() ?: 5
+                BotConfig.delayMaxMs = (BotConfig.maxRandomDelay * 1000).toLong()
                 BotLogger.system("Settings disimpan")
                 Toast.makeText(this@MainActivity, "Settings tersimpan!", Toast.LENGTH_SHORT).show()
             }
@@ -337,7 +334,39 @@ class MainActivity : AppCompatActivity() {
             setPadding(16, 16, 16, 16)
         }
 
-        ll.addView(sectionHeader("ARMY SETUP"))
+        ll.addView(TextView(this).apply {
+            text = "ARMY SETUP"
+            textSize = 14f
+            setTextColor(Color.parseColor("#FF6B35"))
+            setTypeface(null, Typeface.BOLD)
+            setPadding(0, 0, 0, 4)
+        })
+        ll.addView(TextView(this).apply {
+            text = "Tap slot to pick from gallery"
+            textSize = 11f
+            setTextColor(Color.parseColor("#888888"))
+            setPadding(0, 0, 0, 16)
+        })
+
+        // TROOPS
+        ll.addView(sectionHeader("⚔️ TROOPS"))
+        ll.addView(armySlotRow(listOf("Troop 1", "Troop 2", "Troop 3", "Troop 4")))
+
+        // HEROES
+        ll.addView(sectionHeader("👑 HEROES (Maks: 4)"))
+        ll.addView(armySlotRow(listOf("Hero 1", "Hero 2", "Hero 3", "Hero 4")))
+        ll.addView(armySlotRow(listOf("Hero 5", "Hero 6", "", "")))
+
+        // SPELLS
+        ll.addView(sectionHeader("🧪 SPELLS"))
+        ll.addView(armySlotRow(listOf("Spell 1", "Spell 2", "", "")))
+
+        // SIEGE
+        ll.addView(sectionHeader("🎯 SIEGE MACHINE"))
+        ll.addView(armySlotRow(listOf("Siege", "", "", "")))
+
+        // Troops per sisi
+        ll.addView(sectionHeader("Deploy Settings"))
         ll.addView(TextView(this).apply {
             text = "Troops per sisi:"
             textSize = 13f
@@ -347,23 +376,21 @@ class MainActivity : AppCompatActivity() {
         val troopsRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 8, 0, 8)
         }
         val tvTroops = TextView(this).apply {
             text = BotConfig.troopsPerSide.toString()
-            textSize = 18f
+            textSize = 22f
             setTextColor(Color.parseColor("#FFD700"))
-            setPadding(20, 0, 20, 0)
+            setPadding(24, 0, 24, 0)
         }
         troopsRow.addView(Button(this).apply {
             text = "-"
             setBackgroundColor(Color.parseColor("#CC0000"))
             setTextColor(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(80, 80)
+            layoutParams = LinearLayout.LayoutParams(90, 90)
             setOnClickListener {
-                if (BotConfig.troopsPerSide > 1) {
-                    BotConfig.troopsPerSide--
-                    tvTroops.text = BotConfig.troopsPerSide.toString()
-                }
+                if (BotConfig.troopsPerSide > 1) { BotConfig.troopsPerSide--; tvTroops.text = BotConfig.troopsPerSide.toString() }
             }
         })
         troopsRow.addView(tvTroops)
@@ -371,22 +398,107 @@ class MainActivity : AppCompatActivity() {
             text = "+"
             setBackgroundColor(Color.parseColor("#00AA44"))
             setTextColor(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(80, 80)
-            setOnClickListener {
-                BotConfig.troopsPerSide++
-                tvTroops.text = BotConfig.troopsPerSide.toString()
-            }
+            layoutParams = LinearLayout.LayoutParams(90, 90)
+            setOnClickListener { BotConfig.troopsPerSide++; tvTroops.text = BotConfig.troopsPerSide.toString() }
         })
         ll.addView(troopsRow)
 
         ll.addView(TextView(this).apply {
-            text = "\nInfo: Bot akan deploy ${BotConfig.troopsPerSide} troops di tiap sisi (atas, bawah, kiri, kanan)"
+            text = "Info: Bot akan deploy ${BotConfig.troopsPerSide} troops di tiap sisi (atas, bawah, kiri, kanan)"
             textSize = 12f
             setTextColor(Color.parseColor("#888888"))
         })
 
         sv.addView(ll)
         tabContent.addView(sv)
+    }
+
+    private fun armySlotRow(labels: List<String>): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 4, 0, 4)
+            labels.forEach { label ->
+                val slot = LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.CENTER
+                    setBackgroundColor(Color.parseColor("#16213e"))
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                        marginEnd = 4
+                    }
+                    setPadding(4, 8, 4, 8)
+                }
+
+                if (label.isNotEmpty()) {
+                    // Image placeholder
+                    val imgView = ImageView(this@MainActivity).apply {
+                        layoutParams = LinearLayout.LayoutParams(80, 80)
+                        setBackgroundColor(Color.parseColor("#0d0d1a"))
+                        scaleType = ImageView.ScaleType.CENTER_CROP
+                        // Load dari template jika ada
+                        val templateName = label.lowercase().replace(" ", "") + ".png"
+                        loadTemplateImage(this, templateName)
+                    }
+                    slot.addView(imgView)
+
+                    slot.addView(TextView(this@MainActivity).apply {
+                        text = label
+                        textSize = 10f
+                        setTextColor(Color.parseColor("#888888"))
+                        gravity = Gravity.CENTER
+                    })
+
+                    // Counter row
+                    val counterRow = LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER
+                        setPadding(0, 4, 0, 0)
+                    }
+                    counterRow.addView(Button(this@MainActivity).apply {
+                        text = "-"; textSize = 10f
+                        setBackgroundColor(Color.parseColor("#CC0000"))
+                        setTextColor(Color.WHITE)
+                        layoutParams = LinearLayout.LayoutParams(50, 50)
+                    })
+                    counterRow.addView(TextView(this@MainActivity).apply {
+                        text = "1"; textSize = 12f
+                        setTextColor(Color.WHITE)
+                        setPadding(8, 0, 8, 0)
+                        gravity = Gravity.CENTER
+                    })
+                    counterRow.addView(Button(this@MainActivity).apply {
+                        text = "+"; textSize = 10f
+                        setBackgroundColor(Color.parseColor("#00AA44"))
+                        setTextColor(Color.WHITE)
+                        layoutParams = LinearLayout.LayoutParams(50, 50)
+                    })
+                    slot.addView(counterRow)
+                } else {
+                    // Empty slot
+                    slot.addView(ImageView(this@MainActivity).apply {
+                        layoutParams = LinearLayout.LayoutParams(80, 80)
+                        setBackgroundColor(Color.parseColor("#0d0d1a"))
+                        setImageResource(android.R.drawable.ic_menu_add)
+                    })
+                }
+                addView(slot)
+            }
+        }
+    }
+
+    private fun loadTemplateImage(iv: ImageView, name: String) {
+        try {
+            // Cek dulu di custom templates dir
+            val customFile = File(getExternalFilesDir(null), "templates/$name")
+            if (customFile.exists()) {
+                iv.setImageBitmap(BitmapFactory.decodeFile(customFile.absolutePath))
+                return
+            }
+            // Fallback ke assets
+            val bmp = assets.open("templates/$name").use { BitmapFactory.decodeStream(it) }
+            iv.setImageBitmap(bmp)
+        } catch (e: Exception) {
+            iv.setBackgroundColor(Color.parseColor("#16213e"))
+        }
     }
 
     private fun showCalibrationTab() {
@@ -397,44 +509,66 @@ class MainActivity : AppCompatActivity() {
             setPadding(16, 16, 16, 16)
         }
 
+        ll.addView(TextView(this).apply {
+            text = "CALIBRATION ASSETS"
+            textSize = 14f
+            setTextColor(Color.parseColor("#FF6B35"))
+            setTypeface(null, Typeface.BOLD)
+        })
+        ll.addView(TextView(this).apply {
+            text = "Tap GAMBAR untuk ganti template dengan screenshot COC kamu"
+            textSize = 11f
+            setTextColor(Color.parseColor("#888888"))
+            setPadding(0, 4, 0, 16)
+        })
+
         ll.addView(sectionHeader("NAVIGATION"))
-        val navTemplates = listOf(
+        listOf(
             "attack.png" to "Main attack sword icon",
             "find_match.png" to "Find opponent button",
             "attack2.png" to "Confirm attack button",
             "next.png" to "Skip enemy base",
             "returnhome.png" to "Go back to base",
             "searching.png" to "Loading/searching cloud"
-        )
-        navTemplates.forEach { (name, desc) -> ll.addView(templateRow(name, desc)) }
+        ).forEach { (name, desc) -> ll.addView(templateRow(name, desc)) }
 
         ll.addView(sectionHeader("OBSTACLE"))
-        val obstTemplates = listOf(
+        listOf(
             "reload.png" to "Connection error reload",
             "try_again.png" to "Connection retry button",
             "okay.png" to "Generic confirm OK",
             "cancel.png" to "Generic cancel",
             "x_close.png" to "Popup close button",
             "star_bonus.png" to "Star bonus popup header"
-        )
-        obstTemplates.forEach { (name, desc) -> ll.addView(templateRow(name, desc)) }
+        ).forEach { (name, desc) -> ll.addView(templateRow(name, desc)) }
 
         ll.addView(sectionHeader("COLLECTOR TAP"))
-        val colTemplates = listOf(
+        listOf(
             "gold_col.png" to "Gold collector icon",
             "elixir_col.png" to "Elixir collector icon",
             "dark_col.png" to "Dark elixir drill icon"
-        )
-        colTemplates.forEach { (name, desc) -> ll.addView(templateRow(name, desc)) }
+        ).forEach { (name, desc) -> ll.addView(templateRow(name, desc)) }
 
         ll.addView(sectionHeader("SMART ATTACK"))
-        val smartTemplates = listOf(
+        listOf(
             "gold1.png" to "Target Gold Musuh 1",
+            "gold2.png" to "Target Gold Musuh 2",
+            "gold3.png" to "Target Gold Musuh 3",
+            "gold4.png" to "Target Gold Musuh 4",
             "elixir1.png" to "Target Elixir Musuh 1",
+            "elixir2.png" to "Target Elixir Musuh 2",
+            "elixir3.png" to "Target Elixir Musuh 3",
+            "elixir4.png" to "Target Elixir Musuh 4",
             "de1.png" to "Target Dark Elixir Musuh 1",
+            "de2.png" to "Target Dark Elixir Musuh 2",
             "battle_result.png" to "Battle result screen"
-        )
-        smartTemplates.forEach { (name, desc) -> ll.addView(templateRow(name, desc)) }
+        ).forEach { (name, desc) -> ll.addView(templateRow(name, desc)) }
+
+        ll.addView(sectionHeader("WALL UPGRADE"))
+        listOf(
+            "wall_builder.png" to "Open builder/upgrade menu",
+            "wall_item.png" to "Wall in upgrade list"
+        ).forEach { (name, desc) -> ll.addView(templateRow(name, desc)) }
 
         sv.addView(ll)
         tabContent.addView(sv)
@@ -444,12 +578,23 @@ class MainActivity : AppCompatActivity() {
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setBackgroundColor(Color.parseColor("#16213e"))
-            setPadding(12, 12, 12, 12)
-            val margin = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = 4 }
-            layoutParams = margin
+            setPadding(12, 10, 12, 10)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = 4 }
             gravity = Gravity.CENTER_VERTICAL
 
+            // Thumbnail
+            val imgView = ImageView(this@MainActivity).apply {
+                layoutParams = LinearLayout.LayoutParams(80, 80).apply { marginEnd = 12 }
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                setBackgroundColor(Color.parseColor("#0d0d1a"))
+            }
+            loadTemplateImage(imgView, name)
+            addView(imgView)
+
+            // Text info
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
@@ -465,52 +610,75 @@ class MainActivity : AppCompatActivity() {
                     setTextColor(Color.parseColor("#888888"))
                 })
                 addView(TextView(this@MainActivity).apply {
-                    text = "Default Asset (Auto Resize)"
+                    // Cek apakah sudah custom
+                    val customFile = File(getExternalFilesDir(null), "templates/$name")
+                    text = if (customFile.exists()) "✅ Custom Asset" else "Default Asset (Auto Resize)"
                     textSize = 10f
-                    setTextColor(Color.parseColor("#FF6B35"))
+                    setTextColor(if (customFile.exists()) Color.parseColor("#00FF88") else Color.parseColor("#FF6B35"))
                 })
             })
 
+            // Tombol Gambar
             addView(Button(this@MainActivity).apply {
                 text = "📷 Gambar"
                 textSize = 10f
                 setBackgroundColor(Color.parseColor("#334466"))
                 setTextColor(Color.WHITE)
-                layoutParams = LinearLayout.LayoutParams(200, LinearLayout.LayoutParams.WRAP_CONTENT)
+                layoutParams = LinearLayout.LayoutParams(180, LinearLayout.LayoutParams.WRAP_CONTENT)
                 setOnClickListener {
-                    Toast.makeText(this@MainActivity, "Upload $name ke GitHub assets/templates/", Toast.LENGTH_SHORT).show()
+                    currentTemplateTarget = name
+                    val intent = Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
+                    imagePickerLauncher.launch(intent)
                 }
             })
         }
     }
 
-    private fun sectionHeader(text: String): TextView {
-        return TextView(this).apply {
-            this.text = text
-            textSize = 13f
-            setTextColor(Color.parseColor("#FF6B35"))
-            setTypeface(null, Typeface.BOLD)
-            setPadding(0, 16, 0, 8)
+    private fun saveTemplateFromUri(uri: Uri, templateName: String) {
+        try {
+            val inputStream = contentResolver.openInputStream(uri) ?: return
+            val bitmap = BitmapFactory.decodeStream(inputStream)
+            inputStream.close()
+
+            // Simpan ke external files dir
+            val dir = File(getExternalFilesDir(null), "templates")
+            dir.mkdirs()
+            val file = File(dir, templateName)
+            FileOutputStream(file).use { out ->
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+            }
+
+            Toast.makeText(this, "Template '$templateName' berhasil disimpan!", Toast.LENGTH_SHORT).show()
+            BotLogger.system("Template $templateName diupdate dari galeri")
+
+            // Refresh tab kalibrasi
+            showCalibrationTab()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Gagal simpan template: ${e.message}", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private fun sectionHeader(text: String) = TextView(this).apply {
+        this.text = text
+        textSize = 13f
+        setTextColor(Color.parseColor("#FF6B35"))
+        setTypeface(null, Typeface.BOLD)
+        setPadding(0, 16, 0, 8)
     }
 
     private fun inputRow(parent: LinearLayout, label: String, default: String): EditText {
         parent.addView(TextView(this).apply {
-            text = label
-            textSize = 12f
+            text = label; textSize = 12f
             setTextColor(Color.parseColor("#888888"))
             setPadding(0, 8, 0, 2)
         })
-        val et = EditText(this).apply {
-            setText(default)
-            textSize = 14f
+        return EditText(this).apply {
+            setText(default); textSize = 14f
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.parseColor("#16213e"))
             inputType = android.text.InputType.TYPE_CLASS_NUMBER
             setPadding(12, 12, 12, 12)
-        }
-        parent.addView(et)
-        return et
+        }.also { parent.addView(it) }
     }
 
     private fun permissionRow(name: String, granted: Boolean, btnText: String, action: () -> Unit): LinearLayout {
@@ -518,32 +686,24 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             setBackgroundColor(if (granted) Color.parseColor("#0d2e1a") else Color.parseColor("#2e1a0d"))
             setPadding(12, 12, 12, 12)
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = 8 }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = 8 }
             gravity = Gravity.CENTER_VERTICAL
-
             addView(TextView(this@MainActivity).apply {
                 text = "${if (granted) "✅" else "❌"} $name"
                 textSize = 13f
                 setTextColor(Color.WHITE)
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             })
-
             if (!granted) {
                 addView(Button(this@MainActivity).apply {
-                    text = btnText
-                    textSize = 11f
+                    text = btnText; textSize = 11f
                     setBackgroundColor(Color.parseColor("#FF6B35"))
                     setTextColor(Color.WHITE)
                     setOnClickListener { action() }
                 })
             }
-        }
-    }
-
-    private fun checkPermissions() {
-        if (!Settings.canDrawOverlays(this)) {
-            Toast.makeText(this, "Aktifkan Overlay permission untuk floating window!", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -567,39 +727,31 @@ class MainActivity : AppCompatActivity() {
 
     private fun togglePause() {
         val bot = BotService.getInstance() ?: return
-        if (bot.state.value == BotState.PAUSED) {
-            bot.resumeBot(); btnPause.text = "⏸ PAUSE"
-        } else {
-            bot.pauseBot(); btnPause.text = "▶ RESUME"
-        }
+        if (bot.state.value == BotState.PAUSED) { bot.resumeBot(); btnPause.text = "⏸ PAUSE" }
+        else { bot.pauseBot(); btnPause.text = "▶ RESUME" }
     }
 
     private fun observeBot() {
         if (!::tvLog.isInitialized) return
         lifecycleScope.launch {
             BotLogger.logs.collectLatest { logs ->
-                val text = logs.takeLast(80).joinToString("\n") {
-                    "[${it.timestamp}] [${it.level.name}] ${it.message}"
-                }
-                tvLog.text = text
+                tvLog.text = logs.takeLast(80).joinToString("\n") { "[${it.timestamp}] [${it.level.name}] ${it.message}" }
                 if (::scrollLog.isInitialized) scrollLog.post { scrollLog.fullScroll(ScrollView.FOCUS_DOWN) }
             }
         }
         lifecycleScope.launch {
-            BotService.getInstance()?.state?.collectLatest { state ->
-                if (::tvStatus.isInitialized) tvStatus.text = "Status: $state"
-            }
+            BotService.getInstance()?.state?.collectLatest { if (::tvStatus.isInitialized) tvStatus.text = "Status: $it" }
         }
         lifecycleScope.launch {
-            BotService.getInstance()?.session?.collectLatest { sess ->
+            BotService.getInstance()?.session?.collectLatest {
                 if (::tvStats.isInitialized)
-                    tvStats.text = "🏆${sess.totalMatches} 💛${"%,d".format(sess.totalGold)} 💜${"%,d".format(sess.totalElixir)} 🖤${sess.totalDarkElixir}"
+                    tvStats.text = "🏆${it.totalMatches} 💛${"%,d".format(it.totalGold)} 💜${"%,d".format(it.totalElixir)} 🖤${it.totalDarkElixir}"
             }
         }
         lifecycleScope.launch {
-            BotService.getInstance()?.currentLoot?.collectLatest { ld ->
+            BotService.getInstance()?.currentLoot?.collectLatest {
                 if (::tvLoot.isInitialized)
-                    tvLoot.text = "🎯 G:${"%,d".format(ld.gold)} E:${"%,d".format(ld.elixir)} DE:${ld.darkElixir}"
+                    tvLoot.text = "🎯 G:${"%,d".format(it.gold)} E:${"%,d".format(it.elixir)} DE:${it.darkElixir}"
             }
         }
     }
