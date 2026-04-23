@@ -7,19 +7,25 @@ import android.util.Log
 
 enum class Template(val fileName: String) {
     HOME_SCREEN("home_screen.png"),
-    BTN_ATTACK("btn_attack.png"),
-    BTN_FIND_MATCH("btn_find_match.png"),
-    BTN_NEXT("btn_next.png"),
-    BTN_END_BATTLE("btn_end_battle.png"),
-    BTN_RETURN_HOME("btn_return_home.png"),
-    BTN_OKAY("btn_okay.png"),
+    BTN_ATTACK("attack.png"),
+    BTN_FIND_MATCH("find_match.png"),
+    BTN_NEXT("next.png"),
+    BTN_ATTACK_CONFIRM("attack2.png"),
+    BTN_END_BATTLE("end_battle.png"),
+    BTN_RETURN_HOME("returnhome.png"),
+    BTN_OKAY("okay.png"),
+    BTN_CANCEL("cancel.png"),
+    BTN_CLOSE_X("x_close.png"),
     BATTLE_RESULT("battle_result.png"),
-    TROOPS_READY("troops_ready.png"),
-    BUILDER_AVAILABLE("builder_available.png"),
-    UPGRADE_WALL("logo_up.png"),
-    SEARCHING_INDICATOR("searching.png"),
-    GOLD_STORAGE("gold_storage.png"),
-    ELIXIR_STORAGE("elixir_storage.png"),
+    SEARCHING("searching.png"),
+    RELOAD("reload.png"),
+    TRY_AGAIN("try_again.png"),
+    STAR_BONUS("star_bonus.png"),
+    GOLD_COLLECTOR("gold_col.png"),
+    ELIXIR_COLLECTOR("elixir_col.png"),
+    DARK_COLLECTOR("dark_col.png"),
+    WALL_BUILDER("wall_builder.png"),
+    WALL_ITEM("wall_item.png"),
 }
 
 data class MatchResult(
@@ -29,106 +35,67 @@ data class MatchResult(
 )
 
 class TemplateManager(private val context: Context) {
+    private val TAG = "TemplateManager"
+    private val cache = mutableMapOf<Template, Bitmap>()
 
-    companion object {
-        private const val TAG = "TemplateManager"
-        private const val DEFAULT_THRESHOLD = 0.80
-    }
-
-    private val templateCache = mutableMapOf<Template, Bitmap>()
-
-    private fun loadTemplate(template: Template): Bitmap? {
-        templateCache[template]?.let { return it }
+    private fun load(template: Template): Bitmap? {
+        cache[template]?.let { return it }
         return try {
-            val bitmap = context.assets.open("templates/${template.fileName}")
+            val bmp = context.assets.open("templates/${template.fileName}")
                 .use { android.graphics.BitmapFactory.decodeStream(it) }
-            templateCache[template] = bitmap
-            bitmap
+            cache[template] = bmp
+            bmp
         } catch (e: Exception) {
-            Log.e(TAG, "Gagal load template: ${template.fileName}", e)
+            Log.e(TAG, "Gagal load: ${template.fileName}")
             null
         }
     }
 
-    /**
-     * Template matching manual tanpa OpenCV
-     * Pakai pixel comparison sederhana
-     */
-    fun findTemplate(
-        screenshot: Bitmap,
-        template: Template,
-        threshold: Double = DEFAULT_THRESHOLD
-    ): MatchResult {
-        val tmpl = loadTemplate(template) ?: return MatchResult(false)
-
-        val sw = screenshot.width
-        val sh = screenshot.height
-        val tw = tmpl.width
-        val th = tmpl.height
-
+    fun findTemplate(screenshot: Bitmap, template: Template, threshold: Double = 0.80): MatchResult {
+        val tmpl = load(template) ?: return MatchResult(false)
+        val sw = screenshot.width; val sh = screenshot.height
+        val tw = tmpl.width; val th = tmpl.height
         if (tw > sw || th > sh) return MatchResult(false)
 
-        var bestScore = 0.0
-        var bestX = 0
-        var bestY = 0
-
-        // Sample setiap 4 pixel biar lebih cepat
-        val step = 4
         val tmplPixels = IntArray(tw * th)
         tmpl.getPixels(tmplPixels, 0, tw, 0, 0, tw, th)
+
+        var bestScore = 0.0; var bestX = 0; var bestY = 0
+        val step = 4
 
         for (y in 0..(sh - th) step step) {
             for (x in 0..(sw - tw) step step) {
                 val score = calcScore(screenshot, tmplPixels, x, y, tw, th)
-                if (score > bestScore) {
-                    bestScore = score
-                    bestX = x
-                    bestY = y
-                }
+                if (score > bestScore) { bestScore = score; bestX = x; bestY = y }
             }
         }
 
         return if (bestScore >= threshold) {
-            Log.d(TAG, "[SCAN] '${template.fileName}' terdeteksi! (Akurasi: ${"%.1f".format(bestScore * 100)}%)")
-            MatchResult(true, PointF((bestX + tw / 2).toFloat(), (bestY + th / 2).toFloat()), bestScore)
-        } else {
-            Log.d(TAG, "[SCAN] '${template.fileName}' tidak ditemukan (${"%.1f".format(bestScore * 100)}%)")
-            MatchResult(false)
-        }
+            Log.d(TAG, "[SCAN] ${template.fileName} terdeteksi (${"%.1f".format(bestScore * 100)}%)")
+            MatchResult(true, PointF((bestX + tw/2).toFloat(), (bestY + th/2).toFloat()), bestScore)
+        } else MatchResult(false)
     }
 
-    private fun calcScore(screenshot: Bitmap, tmplPixels: IntArray, offX: Int, offY: Int, tw: Int, th: Int): Double {
-        var match = 0
-        var total = 0
-        val step = 4
+    private fun calcScore(ss: Bitmap, tmpl: IntArray, ox: Int, oy: Int, tw: Int, th: Int): Double {
+        var match = 0; var total = 0; val step = 4
         for (ty in 0 until th step step) {
             for (tx in 0 until tw step step) {
-                val tp = tmplPixels[ty * tw + tx]
-                val sp = screenshot.getPixel(offX + tx, offY + ty)
-                val dr = Math.abs(android.graphics.Color.red(tp) - android.graphics.Color.red(sp))
-                val dg = Math.abs(android.graphics.Color.green(tp) - android.graphics.Color.green(sp))
-                val db = Math.abs(android.graphics.Color.blue(tp) - android.graphics.Color.blue(sp))
-                if (dr + dg + db < 60) match++
-                total++
+                val tp = tmpl[ty * tw + tx]; val sp = ss.getPixel(ox + tx, oy + ty)
+                val d = Math.abs(android.graphics.Color.red(tp) - android.graphics.Color.red(sp)) +
+                        Math.abs(android.graphics.Color.green(tp) - android.graphics.Color.green(sp)) +
+                        Math.abs(android.graphics.Color.blue(tp) - android.graphics.Color.blue(sp))
+                if (d < 60) match++; total++
             }
         }
         return if (total == 0) 0.0 else match.toDouble() / total
     }
 
-    fun isVisible(screenshot: Bitmap, template: Template, threshold: Double = DEFAULT_THRESHOLD): Boolean {
-        return findTemplate(screenshot, template, threshold).found
-    }
+    fun isVisible(ss: Bitmap, t: Template, threshold: Double = 0.80) = findTemplate(ss, t, threshold).found
 
-    fun findAny(screenshot: Bitmap, vararg templates: Template): Pair<Template?, MatchResult> {
-        for (template in templates) {
-            val result = findTemplate(screenshot, template)
-            if (result.found) return Pair(template, result)
-        }
+    fun findAny(ss: Bitmap, vararg templates: Template): Pair<Template?, MatchResult> {
+        for (t in templates) { val r = findTemplate(ss, t); if (r.found) return Pair(t, r) }
         return Pair(null, MatchResult(false))
     }
 
-    fun clearCache() {
-        templateCache.values.forEach { it.recycle() }
-        templateCache.clear()
-    }
+    fun clearCache() { cache.values.forEach { it.recycle() }; cache.clear() }
 }
